@@ -1,0 +1,428 @@
+{
+  "test_loss": 0.7941297305690398,
+  "test_accuracy": 0.7332123411978222,
+  "balanced_accuracy": 0.7247225703146756,
+  "majority_baseline_accuracy": 0.24500907441016334,
+  "best_epoch": 6,
+  "final_experiment": "E6b GELU",
+  "config": {
+    "conv_channels": [
+      16,
+      32,
+      64,
+      128,
+      256
+    ],
+    "kernel_sizes": [
+      3,
+      3,
+      3,
+      3,
+      3
+    ],
+    "activation": "gelu",
+    "pool": "max",
+    "batch_norm": true,
+    "dropout": 0.0,
+    "hidden_units": [
+      128,
+      64
+    ],
+    "lr": 0.001
+  },
+  "history": {
+    "train_loss": [
+      1.1189063758690472,
+      0.8947536055333608,
+      0.7877885389300161,
+      0.7519704632231956,
+      0.6455844873906852,
+      0.6193516198973472,
+      0.47908307138051726,
+      0.44348071163477437,
+      0.43513819678556415,
+      0.27671889084329304,
+      0.2751400006123673,
+      0.1714535282918246
+    ],
+    "val_loss": [
+      1.642838728644631,
+      0.9641516395048662,
+      1.215927389751781,
+      0.8489853750575672,
+      1.0797657814892856,
+      0.7665671612999656,
+      0.9795227714018389,
+      0.861170597076416,
+      1.0519279631701384,
+      1.1219712140343405,
+      1.2833279072154653,
+      0.9762139602140947
+    ],
+    "train_accuracy": [
+      0.5371739976644608,
+      0.6430517711171662,
+      0.6928766056831452,
+      0.7045543012845465,
+      0.7493188010899182,
+      0.7703386531724407,
+      0.8283378746594006,
+      0.8341767224601012,
+      0.8431296224211755,
+      0.8999610743479953,
+      0.9015181004281821,
+      0.9427792915531336
+    ],
+    "val_accuracy": [
+      0.33090909090909093,
+      0.6527272727272727,
+      0.5545454545454546,
+      0.6945454545454546,
+      0.62,
+      0.7163636363636363,
+      0.6890909090909091,
+      0.6909090909090909,
+      0.6781818181818182,
+      0.6527272727272727,
+      0.6672727272727272,
+      0.7327272727272728
+    ]
+  },
+  "experiments": {
+    "E0 baseline": {
+      "config": {
+        "conv_channels": [
+          16,
+          32,
+          64
+        ],
+        "kernel_sizes": [
+          3,
+          3,
+          3
+        ],
+        "activation": "relu",
+        "pool": "max",
+        "batch_norm": false,
+        "dropout": 0.0,
+        "hidden_units": [
+          64
+        ],
+        "lr": 0.001
+      },
+      "best_epoch": 17,
+      "epochs_run": 23,
+      "best_val_loss": 0.9021565051512285,
+      "val_acc": 0.6618181818181819,
+      "train_acc": 0.7633320358115998,
+      "params": 286117,
+      "minutes": 1.8642799976500024
+    },
+    "E1 deeper (5 conv, 3 linear)": {
+      "config": {
+        "conv_channels": [
+          16,
+          32,
+          64,
+          128,
+          256
+        ],
+        "kernel_sizes": [
+          3,
+          3,
+          3,
+          3,
+          3
+        ],
+        "activation": "relu",
+        "pool": "max",
+        "batch_norm": false,
+        "dropout": 0.0,
+        "hidden_units": [
+          128,
+          64
+        ],
+        "lr": 0.001
+      },
+      "best_epoch": 19,
+      "epochs_run": 25,
+      "best_val_loss": 0.8635893513939598,
+      "val_acc": 0.6927272727272727,
+      "train_acc": 0.7574931880108992,
+      "params": 532389,
+      "minutes": 2.03134409303334
+    },
+    "E2 + batchnorm": {
+      "config": {
+        "conv_channels": [
+          16,
+          32,
+          64,
+          128,
+          256
+        ],
+        "kernel_sizes": [
+          3,
+          3,
+          3,
+          3,
+          3
+        ],
+        "activation": "relu",
+        "pool": "max",
+        "batch_norm": true,
+        "dropout": 0.0,
+        "hidden_units": [
+          128,
+          64
+        ],
+        "lr": 0.001
+      },
+      "best_epoch": 6,
+      "epochs_run": 12,
+      "best_val_loss": 0.7865236230330034,
+      "val_acc": 0.7109090909090909,
+      "train_acc": 0.7489295445698716,
+      "params": 532885,
+      "minutes": 0.9936895834166687
+    },
+    "E3a dropout 0.3": {
+      "config": {
+        "conv_channels": [
+          16,
+          32,
+          64,
+          128,
+          256
+        ],
+        "kernel_sizes": [
+          3,
+          3,
+          3,
+          3,
+          3
+        ],
+        "activation": "relu",
+        "pool": "max",
+        "batch_norm": true,
+        "dropout": 0.3,
+        "hidden_units": [
+          128,
+          64
+        ],
+        "lr": 0.001
+      },
+      "best_epoch": 6,
+      "epochs_run": 12,
+      "best_val_loss": 0.851194185777144,
+      "val_acc": 0.6836363636363636,
+      "train_acc": 0.7076683534449202,
+      "params": 532885,
+      "minutes": 0.9680277226166633
+    },
+    "E3b dropout 0.5": {
+      "config": {
+        "conv_channels": [
+          16,
+          32,
+          64,
+          128,
+          256
+        ],
+        "kernel_sizes": [
+          3,
+          3,
+          3,
+          3,
+          3
+        ],
+        "activation": "relu",
+        "pool": "max",
+        "batch_norm": true,
+        "dropout": 0.5,
+        "hidden_units": [
+          128,
+          64
+        ],
+        "lr": 0.001
+      },
+      "best_epoch": 12,
+      "epochs_run": 18,
+      "best_val_loss": 0.8256432882222262,
+      "val_acc": 0.7145454545454546,
+      "train_acc": 0.7555469054106656,
+      "params": 532885,
+      "minutes": 1.422570481633329
+    },
+    "E4a kernel 5 (all blocks)": {
+      "config": {
+        "conv_channels": [
+          16,
+          32,
+          64,
+          128,
+          256
+        ],
+        "kernel_sizes": [
+          5,
+          5,
+          5,
+          5,
+          5
+        ],
+        "activation": "relu",
+        "pool": "max",
+        "batch_norm": true,
+        "dropout": 0.0,
+        "hidden_units": [
+          128,
+          64
+        ],
+        "lr": 0.001
+      },
+      "best_epoch": 6,
+      "epochs_run": 12,
+      "best_val_loss": 0.8902465339140458,
+      "val_acc": 0.6672727272727272,
+      "train_acc": 0.7006617360840794,
+      "params": 1229973,
+      "minutes": 1.003900628499999
+    },
+    "E4b kernel 5 first, then 3": {
+      "config": {
+        "conv_channels": [
+          16,
+          32,
+          64,
+          128,
+          256
+        ],
+        "kernel_sizes": [
+          5,
+          3,
+          3,
+          3,
+          3
+        ],
+        "activation": "relu",
+        "pool": "max",
+        "batch_norm": true,
+        "dropout": 0.0,
+        "hidden_units": [
+          128,
+          64
+        ],
+        "lr": 0.001
+      },
+      "best_epoch": 6,
+      "epochs_run": 12,
+      "best_val_loss": 0.8622280194542625,
+      "val_acc": 0.6945454545454546,
+      "train_acc": 0.771117166212534,
+      "params": 533653,
+      "minutes": 0.9506925889166647
+    },
+    "E5 avg pooling": {
+      "config": {
+        "conv_channels": [
+          16,
+          32,
+          64,
+          128,
+          256
+        ],
+        "kernel_sizes": [
+          3,
+          3,
+          3,
+          3,
+          3
+        ],
+        "activation": "relu",
+        "pool": "avg",
+        "batch_norm": true,
+        "dropout": 0.0,
+        "hidden_units": [
+          128,
+          64
+        ],
+        "lr": 0.001
+      },
+      "best_epoch": 9,
+      "epochs_run": 15,
+      "best_val_loss": 0.848596308664842,
+      "val_acc": 0.7072727272727273,
+      "train_acc": 0.7251848968470221,
+      "params": 532885,
+      "minutes": 1.2388607816500021
+    },
+    "E6a LeakyReLU": {
+      "config": {
+        "conv_channels": [
+          16,
+          32,
+          64,
+          128,
+          256
+        ],
+        "kernel_sizes": [
+          3,
+          3,
+          3,
+          3,
+          3
+        ],
+        "activation": "leaky_relu",
+        "pool": "max",
+        "batch_norm": true,
+        "dropout": 0.0,
+        "hidden_units": [
+          128,
+          64
+        ],
+        "lr": 0.001
+      },
+      "best_epoch": 6,
+      "epochs_run": 12,
+      "best_val_loss": 0.8524943698536266,
+      "val_acc": 0.6763636363636364,
+      "train_acc": 0.753600622810432,
+      "params": 532885,
+      "minutes": 0.9494537392999973
+    },
+    "E6b GELU": {
+      "config": {
+        "conv_channels": [
+          16,
+          32,
+          64,
+          128,
+          256
+        ],
+        "kernel_sizes": [
+          3,
+          3,
+          3,
+          3,
+          3
+        ],
+        "activation": "gelu",
+        "pool": "max",
+        "batch_norm": true,
+        "dropout": 0.0,
+        "hidden_units": [
+          128,
+          64
+        ],
+        "lr": 0.001
+      },
+      "best_epoch": 6,
+      "epochs_run": 12,
+      "best_val_loss": 0.7665671612999656,
+      "val_acc": 0.7163636363636363,
+      "train_acc": 0.7703386531724407,
+      "params": 532885,
+      "minutes": 0.9615522238333369
+    }
+  }
+}
