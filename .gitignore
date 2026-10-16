@@ -3,5 +3,6 @@ csci-e89/
 .venv-1
 ps_3/data/
 ps_3/data_sets/
+**/data_sets/
 data/
 
