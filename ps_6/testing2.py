@@ -1,0 +1,1308 @@
+{
+ "cells": [
+  {
+   "cell_type": "markdown",
+   "id": "2998a4f7",
+   "metadata": {},
+   "source": [
+    "You are provided with the Geron’s notebook from chapter 18 of his PyTorch book, \n",
+    "18_autoencoders_gans_and_diffusion_models.ipynb.Please create your own \n",
+    "notebook only with your solutions to the following problems. Please do not submit \n",
+    "modified version of Geron’s notebook. "
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "3dbf4437",
+   "metadata": {},
+   "source": [
+    "## Problem 1.  \n",
+    "Plots of training data on slides 24 and 28 are actually from another example and not from the above notebook. Use the following code to generate a new set of 3D data X_train : \n",
+    "\n",
+    "```\n",
+    "import numpy as np \n",
+    "np.random.seed(4) \n",
+    "def generate_3d_data(m, w1=0.1, w2=0.3, noise=0.1): \n",
+    "    angles = np.random.rand(m) * 3 * np.pi / 2 - 0.5 \n",
+    "    data = np.empty((m, 3)) \n",
+    "    data[:, 0] = np.cos(angles) + np.sin(angles)/2 + noise * np.random.randn(m) / 2 \n",
+    "    data[:, 1] = np.sin(angles) * 0.7 + noise * np.random.randn(m) / 2 \n",
+    "    data[:, 2] = data[:, 0] * w1 + data[:, 1] * w2 + noise * np.random.randn(m) \n",
+    "    return data \n",
+    " \n",
+    "X_train = generate_3d_data(60) \n",
+    "X_train = X_train - X_train.mean(axis=0, keepdims=0) \n",
+    "```\n",
+    " \n",
+    "Create validation data, train the autoencoder with code given on slide 25 and plot resulting 2D codings"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "e53a66de",
+   "metadata": {},
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "'cuda'"
+      ]
+     },
+     "execution_count": 6,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "# setup\n",
+    "import numpy as np \n",
+    "import matplotlib as mpl\n",
+    "import matplotlib.pyplot as plt\n",
+    "import plotly.express as px\n",
+    "import torch\n",
+    "import torch.nn as nn\n",
+    "from torch.utils.data import TensorDataset, DataLoader\n",
+    "import torchmetrics\n",
+    "from mpl_toolkits.mplot3d import Axes3D\n",
+    "np.random.seed(4) \n",
+    "torch.manual_seed(42)\n",
+    "\n",
+    "plt.rc('font', size=14)\n",
+    "plt.rc('axes', labelsize=14, titlesize=14)\n",
+    "plt.rc('legend', fontsize=14)\n",
+    "plt.rc('xtick', labelsize=10)\n",
+    "plt.rc('ytick', labelsize=10)\n",
+    "\n",
+    "if torch.cuda.is_available():\n",
+    "    device = \"cuda\"\n",
+    "elif torch.backends.mps.is_available():\n",
+    "    device = \"mps\"\n",
+    "else:\n",
+    "    device = \"cpu\"\n",
+    "\n",
+    "device"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 7,
+   "id": "7f35bff8",
+   "metadata": {},
+   "outputs": [],
+   "source": "# train() and evaluate_tm() are reused unchanged from Géron's chapter 18 notebook\ndef evaluate_tm(model, data_loader, metric):\n    model.eval()\n    metric.reset()\n    with torch.no_grad():\n        for X_batch, y_batch in data_loader:\n            X_batch, y_batch = X_batch.to(device), y_batch.to(device)\n            y_pred = model(X_batch)\n            if isinstance(y_pred, tuple):\n                y_pred = y_pred.output\n            metric.update(y_pred, y_batch)\n    return metric.compute()\n\ndef train(model, optimizer, loss_fn, metric, train_loader, valid_loader,\n          n_epochs, patience=2, factor=0.5, epoch_callback=None):\n    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(\n        optimizer, mode=\"max\", patience=patience, factor=factor)\n    history = {\"train_losses\": [], \"train_metrics\": [], \"valid_metrics\": []}\n    for epoch in range(n_epochs):\n        total_loss = 0.0\n        metric.reset()\n        model.train()\n        if epoch_callback is not None:\n            epoch_callback(model, epoch)\n        for index, (X_batch, y_batch) in enumerate(train_loader):\n            X_batch, y_batch = X_batch.to(device), y_batch.to(device)\n            y_pred = model(X_batch)\n            loss = loss_fn(y_pred, y_batch)\n            total_loss += loss.item()\n            loss.backward()\n            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)\n            optimizer.step()\n            optimizer.zero_grad()\n            if isinstance(y_pred, tuple):\n                y_pred = y_pred.output\n            metric.update(y_pred, y_batch)\n            train_metric = metric.compute().item()\n            print(f\"\\rBatch {index + 1}/{len(train_loader)}\", end=\"\")\n            print(f\", loss={total_loss/(index+1):.4f}\", end=\"\")\n            print(f\", {train_metric=:.3f}\", end=\"\")\n        history[\"train_losses\"].append(total_loss / len(train_loader))\n        history[\"train_metrics\"].append(train_metric)\n        val_metric = evaluate_tm(model, valid_loader, metric).item()\n        history[\"valid_metrics\"].append(val_metric)\n        scheduler.step(val_metric)\n        print(f\"\\rEpoch {epoch + 1}/{n_epochs},                      \"\n              f\"train loss: {history['train_losses'][-1]:.4f}, \"\n              f\"train metric: {history['train_metrics'][-1]:.3}, \"\n              f\"valid metric: {history['valid_metrics'][-1]:.3}\")\n    return history"
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 18,
+   "id": "f5e8b5b7",
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "x_train: (60, 3)\n"
+     ]
+    },
+    {
+     "data": {
+      "application/vnd.plotly.v1+json": {
+       "data": [
+        {
+         "hovertemplate": "x1=%{x}<br>x2=%{y}<br>x3=%{z}<extra></extra>",
+         "legendgroup": "",
+         "marker": {
+          "color": "#636efa",
+          "symbol": "circle"
+         },
+         "mode": "markers",
+         "name": "",
+         "scene": "scene",
+         "showlegend": false,
+         "type": "scatter3d",
+         "x": {
+          "bdata": "xLkXis488b+BAKfwyFDRP3HLgV3QWOw/u8NiEJRH7D9tsqELNZDQPyr9eS8rEOI/VQWg8eQT9L/vU4LQsPzoP4eCfefSG+o/3LXIxIEY57+yRznOgSDiv8KT2w4CU9s/6FXDQzG77L8tWSWJV0Hkv7IXODYrj/O/C/rgZ/ba7j9Jqh+1YJHpP8ma5GMl8PG/vchr95x58b8olpFKq9nbP8cA2tPr8/C/GDUgM0a06D+2karwK+SiP6X9mWTuffA/X8VFxT5bsD8Cg6AdRZLvv0Z2ItKfvvA/PRxHBrNI7z9AXNjYa+7yv3hhfOO05cg/xQ9T9Q2k5D9ATEarAhBXv9LkmLw23dG/NBHap7Kb5T+bxJm0ZQXtP8nILM3Reey/12rY2SfM678YJGzaUqvbv50H5p0V6O2/Jbvpwk8R7j/ULIDX5I3Avy1Pkjj/V+0/b1ec6M9c8L/PtTlJkvXtP/2twumiiLa/JSS64xy+8L+h1TxzUp3qPzQVcpILm+I/0l3dfVRU3T+F2aUE/VDyv/dtfpDryew/9qMdXPLP87++9oDYa4fwP392tFTmgtu/9TIfnYgV7b9nvlvYtObyv83urEYcf+8/nDdM1GwMkj8fDjQ9KfLvP6C5zJnBT9g/",
+          "dtype": "f8"
+         },
+         "y": {
+          "bdata": "YGdWaDcU67+wy6tz55TXPxyg3yXahcc/YFD7St8Jzj++klm2sv7aP/AdgetTVuO/Xpb7fKeF27/rugWDS+zZvyrmVfqiGNU/uLOI7f0IuD/e47VNL+rFP3jJeetOxNc/rDP3ry33rr/4vO5AzvexPxLL8lLopeC/LAxBvdbAvz/2fKSQuCnYv6mGJAeDzei/KLbFgD3rxr8KNy9+U9bcP3zSUyOSQ+2/sIuRSXB0zT8MBvB0+HPXPyCMw3Pa24i/qLQ7ro8M2T8TvggpRD/Kv3D9HJaHdKc/uO5qr80IpT9WLeg70uTnv2C+o770Ltg/rJFOy8bt2D86sZ6hm97UPwhfe1kDYMk/XjyRsSxp1z96rglvc+bKPyimFid8Isu/PG4XgrTaqL+qhuj8wu7RP0DhtwKbtpS/lHclPAwj0D90XqhzpdrbP4QFzHXUo9E/dBIIELs7zb9AGJwd+LKkP9Bx/5XWxtY/JMxQw29T67+s8To9QBDXP1SjqlhBhd0/PFxCs6Rz2z+QEaulaQXpvzlR5fLfB9O/lL39lpGp5L8oUcrCYxm7vyxvxqrHeMU/qG/UTNIox781G7OMAIPhv6Kl30dPg9I/uAFrhXW92j8gcfJhNyGDP4A/ect9k90/",
+          "dtype": "f8"
+         },
+         "z": {
+          "bdata": "4o/xLx5y3L9QGmoY79uBv6PskBoI4cg/lMT98KrXvD+SOiPd7E/QP4xiwJHTT8m/HhjFtXyE0b/8UrHhmvq5v0BGqmrqT8I/KEKkU1NHmz+BUoT5Cs+wv25ut55BdcQ/+zgwVq6Uw79kPkVjALSsPzQHJBrBlc6/nyoK2l89xD/jV8ReW7C6vyOitflQKOG/BjYCu3NMvr+Hhvo8w/fJPyitD0g6kNK/ItruECsmtz90eyaPcWenvy2b2dyiZ8E/e+cj/bYlzT/IGpnXH9G3vzRF7Vw1CbE/UtY5u7Nq1j9UYdxzMNfKv9avIWY3hLg/Y8NumYU+xz+dTaSvqfnGP5ARpgFOQ4c/dYFobEhtzz81UqUwONPOP46Eu8DaFqA/fk92WuDUwL9gSrTtrCFovwDmyIPP9KG//v4TFZ4Xuj9GBwfh9Ay5PxKuum/aOdE/CxK5bpMBzb8X11Hu71/PPwSBuuxdaa4/pgwJkv5u1L+DDubf90bFP7AtgXvrCMA/M1deIQ7bxD/Es0S3dUXZv5A9PIvxK4Y/coD/QfW52b98Xr9WwmSfv6xWrT+e8J8/MLNXDSCM1L8qfsP1EFXJv44ruDN82Lc/T2UMwvQnwT8ITjWq8cC+P0+iWs/igcQ/",
+          "dtype": "f8"
+         }
+        }
+       ],
+       "layout": {
+        "legend": {
+         "tracegroupgap": 0
+        },
+        "margin": {
+         "t": 60
+        },
+        "scene": {
+         "domain": {
+          "x": [
+           0,
+           1
+          ],
+          "y": [
+           0,
+           1
+          ]
+         },
+         "xaxis": {
+          "title": {
+           "text": "x1"
+          }
+         },
+         "yaxis": {
+          "title": {
+           "text": "x2"
+          }
+         },
+         "zaxis": {
+          "title": {
+           "text": "x3"
+          }
+         }
+        },
+        "template": {
+         "data": {
+          "bar": [
+           {
+            "error_x": {
+             "color": "#2a3f5f"
+            },
+            "error_y": {
+             "color": "#2a3f5f"
+            },
+            "marker": {
+             "line": {
+              "color": "#E5ECF6",
+              "width": 0.5
+             },
+             "pattern": {
+              "fillmode": "overlay",
+              "size": 10,
+              "solidity": 0.2
+             }
+            },
+            "type": "bar"
+           }
+          ],
+          "barpolar": [
+           {
+            "marker": {
+             "line": {
+              "color": "#E5ECF6",
+              "width": 0.5
+             },
+             "pattern": {
+              "fillmode": "overlay",
+              "size": 10,
+              "solidity": 0.2
+             }
+            },
+            "type": "barpolar"
+           }
+          ],
+          "carpet": [
+           {
+            "aaxis": {
+             "endlinecolor": "#2a3f5f",
+             "gridcolor": "white",
+             "linecolor": "white",
+             "minorgridcolor": "white",
+             "startlinecolor": "#2a3f5f"
+            },
+            "baxis": {
+             "endlinecolor": "#2a3f5f",
+             "gridcolor": "white",
+             "linecolor": "white",
+             "minorgridcolor": "white",
+             "startlinecolor": "#2a3f5f"
+            },
+            "type": "carpet"
+           }
+          ],
+          "choropleth": [
+           {
+            "colorbar": {
+             "outlinewidth": 0,
+             "ticks": ""
+            },
+            "type": "choropleth"
+           }
+          ],
+          "contour": [
+           {
+            "colorbar": {
+             "outlinewidth": 0,
+             "ticks": ""
+            },
+            "colorscale": [
+             [
+              0,
+              "#0d0887"
+             ],
+             [
+              0.1111111111111111,
+              "#46039f"
+             ],
+             [
+              0.2222222222222222,
+              "#7201a8"
+             ],
+             [
+              0.3333333333333333,
+              "#9c179e"
+             ],
+             [
+              0.4444444444444444,
+              "#bd3786"
+             ],
+             [
+              0.5555555555555556,
+              "#d8576b"
+             ],
+             [
+              0.6666666666666666,
+              "#ed7953"
+             ],
+             [
+              0.7777777777777778,
+              "#fb9f3a"
+             ],
+             [
+              0.8888888888888888,
+              "#fdca26"
+             ],
+             [
+              1,
+              "#f0f921"
+             ]
+            ],
+            "type": "contour"
+           }
+          ],
+          "contourcarpet": [
+           {
+            "colorbar": {
+             "outlinewidth": 0,
+             "ticks": ""
+            },
+            "type": "contourcarpet"
+           }
+          ],
+          "heatmap": [
+           {
+            "colorbar": {
+             "outlinewidth": 0,
+             "ticks": ""
+            },
+            "colorscale": [
+             [
+              0,
+              "#0d0887"
+             ],
+             [
+              0.1111111111111111,
+              "#46039f"
+             ],
+             [
+              0.2222222222222222,
+              "#7201a8"
+             ],
+             [
+              0.3333333333333333,
+              "#9c179e"
+             ],
+             [
+              0.4444444444444444,
+              "#bd3786"
+             ],
+             [
+              0.5555555555555556,
+              "#d8576b"
+             ],
+             [
+              0.6666666666666666,
+              "#ed7953"
+             ],
+             [
+              0.7777777777777778,
+              "#fb9f3a"
+             ],
+             [
+              0.8888888888888888,
+              "#fdca26"
+             ],
+             [
+              1,
+              "#f0f921"
+             ]
+            ],
+            "type": "heatmap"
+           }
+          ],
+          "histogram": [
+           {
+            "marker": {
+             "pattern": {
+              "fillmode": "overlay",
+              "size": 10,
+              "solidity": 0.2
+             }
+            },
+            "type": "histogram"
+           }
+          ],
+          "histogram2d": [
+           {
+            "colorbar": {
+             "outlinewidth": 0,
+             "ticks": ""
+            },
+            "colorscale": [
+             [
+              0,
+              "#0d0887"
+             ],
+             [
+              0.1111111111111111,
+              "#46039f"
+             ],
+             [
+              0.2222222222222222,
+              "#7201a8"
+             ],
+             [
+              0.3333333333333333,
+              "#9c179e"
+             ],
+             [
+              0.4444444444444444,
+              "#bd3786"
+             ],
+             [
+              0.5555555555555556,
+              "#d8576b"
+             ],
+             [
+              0.6666666666666666,
+              "#ed7953"
+             ],
+             [
+              0.7777777777777778,
+              "#fb9f3a"
+             ],
+             [
+              0.8888888888888888,
+              "#fdca26"
+             ],
+             [
+              1,
+              "#f0f921"
+             ]
+            ],
+            "type": "histogram2d"
+           }
+          ],
+          "histogram2dcontour": [
+           {
+            "colorbar": {
+             "outlinewidth": 0,
+             "ticks": ""
+            },
+            "colorscale": [
+             [
+              0,
+              "#0d0887"
+             ],
+             [
+              0.1111111111111111,
+              "#46039f"
+             ],
+             [
+              0.2222222222222222,
+              "#7201a8"
+             ],
+             [
+              0.3333333333333333,
+              "#9c179e"
+             ],
+             [
+              0.4444444444444444,
+              "#bd3786"
+             ],
+             [
+              0.5555555555555556,
+              "#d8576b"
+             ],
+             [
+              0.6666666666666666,
+              "#ed7953"
+             ],
+             [
+              0.7777777777777778,
+              "#fb9f3a"
+             ],
+             [
+              0.8888888888888888,
+              "#fdca26"
+             ],
+             [
+              1,
+              "#f0f921"
+             ]
+            ],
+            "type": "histogram2dcontour"
+           }
+          ],
+          "mesh3d": [
+           {
+            "colorbar": {
+             "outlinewidth": 0,
+             "ticks": ""
+            },
+            "type": "mesh3d"
+           }
+          ],
+          "parcoords": [
+           {
+            "line": {
+             "colorbar": {
+              "outlinewidth": 0,
+              "ticks": ""
+             }
+            },
+            "type": "parcoords"
+           }
+          ],
+          "pie": [
+           {
+            "automargin": true,
+            "type": "pie"
+           }
+          ],
+          "scatter": [
+           {
+            "fillpattern": {
+             "fillmode": "overlay",
+             "size": 10,
+             "solidity": 0.2
+            },
+            "type": "scatter"
+           }
+          ],
+          "scatter3d": [
+           {
+            "line": {
+             "colorbar": {
+              "outlinewidth": 0,
+              "ticks": ""
+             }
+            },
+            "marker": {
+             "colorbar": {
+              "outlinewidth": 0,
+              "ticks": ""
+             }
+            },
+            "type": "scatter3d"
+           }
+          ],
+          "scattercarpet": [
+           {
+            "marker": {
+             "colorbar": {
+              "outlinewidth": 0,
+              "ticks": ""
+             }
+            },
+            "type": "scattercarpet"
+           }
+          ],
+          "scattergeo": [
+           {
+            "marker": {
+             "colorbar": {
+              "outlinewidth": 0,
+              "ticks": ""
+             }
+            },
+            "type": "scattergeo"
+           }
+          ],
+          "scattergl": [
+           {
+            "marker": {
+             "colorbar": {
+              "outlinewidth": 0,
+              "ticks": ""
+             }
+            },
+            "type": "scattergl"
+           }
+          ],
+          "scattermap": [
+           {
+            "marker": {
+             "colorbar": {
+              "outlinewidth": 0,
+              "ticks": ""
+             }
+            },
+            "type": "scattermap"
+           }
+          ],
+          "scatterpolar": [
+           {
+            "marker": {
+             "colorbar": {
+              "outlinewidth": 0,
+              "ticks": ""
+             }
+            },
+            "type": "scatterpolar"
+           }
+          ],
+          "scatterpolargl": [
+           {
+            "marker": {
+             "colorbar": {
+              "outlinewidth": 0,
+              "ticks": ""
+             }
+            },
+            "type": "scatterpolargl"
+           }
+          ],
+          "scatterternary": [
+           {
+            "marker": {
+             "colorbar": {
+              "outlinewidth": 0,
+              "ticks": ""
+             }
+            },
+            "type": "scatterternary"
+           }
+          ],
+          "surface": [
+           {
+            "colorbar": {
+             "outlinewidth": 0,
+             "ticks": ""
+            },
+            "colorscale": [
+             [
+              0,
+              "#0d0887"
+             ],
+             [
+              0.1111111111111111,
+              "#46039f"
+             ],
+             [
+              0.2222222222222222,
+              "#7201a8"
+             ],
+             [
+              0.3333333333333333,
+              "#9c179e"
+             ],
+             [
+              0.4444444444444444,
+              "#bd3786"
+             ],
+             [
+              0.5555555555555556,
+              "#d8576b"
+             ],
+             [
+              0.6666666666666666,
+              "#ed7953"
+             ],
+             [
+              0.7777777777777778,
+              "#fb9f3a"
+             ],
+             [
+              0.8888888888888888,
+              "#fdca26"
+             ],
+             [
+              1,
+              "#f0f921"
+             ]
+            ],
+            "type": "surface"
+           }
+          ],
+          "table": [
+           {
+            "cells": {
+             "fill": {
+              "color": "#EBF0F8"
+             },
+             "line": {
+              "color": "white"
+             }
+            },
+            "header": {
+             "fill": {
+              "color": "#C8D4E3"
+             },
+             "line": {
+              "color": "white"
+             }
+            },
+            "type": "table"
+           }
+          ]
+         },
+         "layout": {
+          "annotationdefaults": {
+           "arrowcolor": "#2a3f5f",
+           "arrowhead": 0,
+           "arrowwidth": 1
+          },
+          "autotypenumbers": "strict",
+          "coloraxis": {
+           "colorbar": {
+            "outlinewidth": 0,
+            "ticks": ""
+           }
+          },
+          "colorscale": {
+           "diverging": [
+            [
+             0,
+             "#8e0152"
+            ],
+            [
+             0.1,
+             "#c51b7d"
+            ],
+            [
+             0.2,
+             "#de77ae"
+            ],
+            [
+             0.3,
+             "#f1b6da"
+            ],
+            [
+             0.4,
+             "#fde0ef"
+            ],
+            [
+             0.5,
+             "#f7f7f7"
+            ],
+            [
+             0.6,
+             "#e6f5d0"
+            ],
+            [
+             0.7,
+             "#b8e186"
+            ],
+            [
+             0.8,
+             "#7fbc41"
+            ],
+            [
+             0.9,
+             "#4d9221"
+            ],
+            [
+             1,
+             "#276419"
+            ]
+           ],
+           "sequential": [
+            [
+             0,
+             "#0d0887"
+            ],
+            [
+             0.1111111111111111,
+             "#46039f"
+            ],
+            [
+             0.2222222222222222,
+             "#7201a8"
+            ],
+            [
+             0.3333333333333333,
+             "#9c179e"
+            ],
+            [
+             0.4444444444444444,
+             "#bd3786"
+            ],
+            [
+             0.5555555555555556,
+             "#d8576b"
+            ],
+            [
+             0.6666666666666666,
+             "#ed7953"
+            ],
+            [
+             0.7777777777777778,
+             "#fb9f3a"
+            ],
+            [
+             0.8888888888888888,
+             "#fdca26"
+            ],
+            [
+             1,
+             "#f0f921"
+            ]
+           ],
+           "sequentialminus": [
+            [
+             0,
+             "#0d0887"
+            ],
+            [
+             0.1111111111111111,
+             "#46039f"
+            ],
+            [
+             0.2222222222222222,
+             "#7201a8"
+            ],
+            [
+             0.3333333333333333,
+             "#9c179e"
+            ],
+            [
+             0.4444444444444444,
+             "#bd3786"
+            ],
+            [
+             0.5555555555555556,
+             "#d8576b"
+            ],
+            [
+             0.6666666666666666,
+             "#ed7953"
+            ],
+            [
+             0.7777777777777778,
+             "#fb9f3a"
+            ],
+            [
+             0.8888888888888888,
+             "#fdca26"
+            ],
+            [
+             1,
+             "#f0f921"
+            ]
+           ]
+          },
+          "colorway": [
+           "#636efa",
+           "#EF553B",
+           "#00cc96",
+           "#ab63fa",
+           "#FFA15A",
+           "#19d3f3",
+           "#FF6692",
+           "#B6E880",
+           "#FF97FF",
+           "#FECB52"
+          ],
+          "font": {
+           "color": "#2a3f5f"
+          },
+          "geo": {
+           "bgcolor": "white",
+           "lakecolor": "white",
+           "landcolor": "#E5ECF6",
+           "showlakes": true,
+           "showland": true,
+           "subunitcolor": "white"
+          },
+          "hoverlabel": {
+           "align": "left"
+          },
+          "hovermode": "closest",
+          "paper_bgcolor": "white",
+          "plot_bgcolor": "#E5ECF6",
+          "polar": {
+           "angularaxis": {
+            "gridcolor": "white",
+            "linecolor": "white",
+            "ticks": ""
+           },
+           "bgcolor": "#E5ECF6",
+           "radialaxis": {
+            "gridcolor": "white",
+            "linecolor": "white",
+            "ticks": ""
+           }
+          },
+          "scene": {
+           "xaxis": {
+            "backgroundcolor": "#E5ECF6",
+            "gridcolor": "white",
+            "gridwidth": 2,
+            "linecolor": "white",
+            "showbackground": true,
+            "ticks": "",
+            "zerolinecolor": "white"
+           },
+           "yaxis": {
+            "backgroundcolor": "#E5ECF6",
+            "gridcolor": "white",
+            "gridwidth": 2,
+            "linecolor": "white",
+            "showbackground": true,
+            "ticks": "",
+            "zerolinecolor": "white"
+           },
+           "zaxis": {
+            "backgroundcolor": "#E5ECF6",
+            "gridcolor": "white",
+            "gridwidth": 2,
+            "linecolor": "white",
+            "showbackground": true,
+            "ticks": "",
+            "zerolinecolor": "white"
+           }
+          },
+          "shapedefaults": {
+           "line": {
+            "color": "#2a3f5f"
+           }
+          },
+          "ternary": {
+           "aaxis": {
+            "gridcolor": "white",
+            "linecolor": "white",
+            "ticks": ""
+           },
+           "baxis": {
+            "gridcolor": "white",
+            "linecolor": "white",
+            "ticks": ""
+           },
+           "bgcolor": "#E5ECF6",
+           "caxis": {
+            "gridcolor": "white",
+            "linecolor": "white",
+            "ticks": ""
+           }
+          },
+          "title": {
+           "x": 0.05
+          },
+          "xaxis": {
+           "automargin": true,
+           "gridcolor": "white",
+           "linecolor": "white",
+           "ticks": "",
+           "title": {
+            "standoff": 15
+           },
+           "zerolinecolor": "white",
+           "zerolinewidth": 2
+          },
+          "yaxis": {
+           "automargin": true,
+           "gridcolor": "white",
+           "linecolor": "white",
+           "ticks": "",
+           "title": {
+            "standoff": 15
+           },
+           "zerolinecolor": "white",
+           "zerolinewidth": 2
+          }
+         }
+        }
+       }
+      }
+     },
+     "metadata": {},
+     "output_type": "display_data"
+    },
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "x_valid: (500, 3)\n",
+      "ok\n",
+      "Epoch 1/20,                      train loss: 0.4854, train metric: 0.706, valid metric: 0.284\n",
+      "Epoch 2/20,                      train loss: 0.0722, train metric: 0.271, valid metric: 0.196\n",
+      "Epoch 3/20,                      train loss: 0.0353, train metric: 0.188, valid metric: 0.19\n",
+      "Epoch 4/20,                      train loss: 0.0330, train metric: 0.182, valid metric: 0.188\n",
+      "Epoch 5/20,                      train loss: 0.0282, train metric: 0.167, valid metric: 0.163\n",
+      "Epoch 6/20,                      train loss: 0.0205, train metric: 0.143, valid metric: 0.137\n",
+      "Epoch 7/20,                      train loss: 0.0141, train metric: 0.119, valid metric: 0.108\n",
+      "Epoch 8/20,                      train loss: 0.0083, train metric: 0.0915, valid metric: 0.0927\n",
+      "Epoch 9/20,                      train loss: 0.0060, train metric: 0.0779, valid metric: 0.0798\n",
+      "Epoch 10/20,                      train loss: 0.0043, train metric: 0.0664, valid metric: 0.0702\n",
+      "Epoch 11/20,                      train loss: 0.0035, train metric: 0.059, valid metric: 0.0668\n",
+      "Epoch 12/20,                      train loss: 0.0032, train metric: 0.0564, valid metric: 0.0643\n",
+      "Epoch 13/20,                      train loss: 0.0029, train metric: 0.054, valid metric: 0.0627\n",
+      "Epoch 14/20,                      train loss: 0.0027, train metric: 0.0527, valid metric: 0.0622\n",
+      "Epoch 15/20,                      train loss: 0.0028, train metric: 0.0523, valid metric: 0.0617\n",
+      "Epoch 16/20,                      train loss: 0.0027, train metric: 0.052, valid metric: 0.0614\n",
+      "Epoch 17/20,                      train loss: 0.0027, train metric: 0.0516, valid metric: 0.0612\n",
+      "Epoch 18/20,                      train loss: 0.0027, train metric: 0.0515, valid metric: 0.0611\n",
+      "Epoch 19/20,                      train loss: 0.0026, train metric: 0.0513, valid metric: 0.061\n",
+      "Epoch 20/20,                      train loss: 0.0026, train metric: 0.0513, valid metric: 0.0609\n"
+     ]
+    },
+    {
+     "data": {
+      "image/png": "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jh2rCRMmtLlRAAAAQLy0OSCvW7dO9913X1h1//SnP7W5QQAAAEA8tTkg9+zZU/fcc0+zr//tb3/TJ598os6dO2vMmDEdahwAAAAQa20OyKNGjdKoUaOafO3JJ5/U+vXrlZmZqZdeekkFBQUdbiAAAAAQSxG7SO9Xv/qVrr/+emVlZWn58uUqKiqK1KYBAACAmIlIQH7ggQd022236aijjtKKFSt0+umnR2KzAAAAQMy1eYjFke68807NmzdPubm5ev311zVixIhGdT777DP95S9/0aeffiqXy6XBgwfr2muvVV5eXkffHgAAAIioDvUgz549W/PmzVOfPn20cuXKJsPxgw8+qKFDh+qTTz7R5ZdfrksvvVTr1q1TQUGBlixZ0pG3BwAAACLOZYwxbV3JGKNrr71WpaWl6tevn9544w3l5+c3Wffuu+/WsGHDdOmllwbL6uvrVVhYqMrKSm3btk1paR3uyI4Kn8+nnJwcVVdXKzs7O97NAQAAwBGikdfa3INcX1+vGTNmqLS0VP/2b/+mt956q9lwLEn/7//9v5BwLEmpqakaN26cdu7cqYqKijY3GgAAAIiWNnXd1tXVafr06Xruuec0aNAgvfHGG62OI+7cuXOT5R999JFSUlLUs2fPtjQBAAAAiKqwA/LBgwd1ySWXaMmSJRo+fLhWrFihXr16tetNly5dqrKyMl100UU66qij2rUNAAAAIBrCDsjXXXedlixZIpfLpXHjxunJJ59stu4ll1yiIUOGNPnaxo0bddVVV6l37956/PHH295iAAAAIIrCDsivvfaapMAFeq0F2wsuuKDJ8i1btmjixIlyuVxavny5+vTp04amAgAAANEXVkCur69XSUmJwp3woqne48rKShUVFWnv3r1asWJFk1PCAQAAAPHWrmne2mr79u3BWStWrFihkSNHRvstI4Jp3gAAAOzNFtO8tdWuXbt01llnaefOnXr99dcdE44BAACQnKJ+h4677rpLn332mfr376+f/vSnjV7/7W9/q+HDh0e7GQAAAEBYoh6Qb775Zl122WXNvt6vX79oNwEAAAAIW9QD8uDBgzV48OBovw0AAAAQEVEfg4zo8HqlsrLAMwAAACKHgOxAHo/Uv79UVBR49nji3SIAAIDEQUB2GK9XmjlT8vsDy36/NGsWPckAAACRQkB2mPLyw+G4QX29tGlT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63ZL48cTjgEAiBZ6kIEw0HMLAEDycFRAfv/997V27VqdccYZGj58eIt1169fr5UrVzYqv+GGG6LVPCQ4t5tgDABAMnBEQH7//fd13XXXqa6uTp9++qkeeeSRVgPyypUrdffdd+uKK66IUSsBAACQCBwRkF0ulx5//HEVFhaqe/fuYa/Xu3dvPf7449FrGAAAABKOIwLyyJEj27Xevn37tHDhQqWlpel73/ueBg8eHOGWAQAAINEk9CwWtbW1WrZsmZ599lmNGDFC1157bav1fT5fyAMAAADJJS49yB999JFWr17dYp3JkyfruOOOa/d7jB8/XjNmzFBmZqYkae3atRozZoxOO+00XXXVVU2uM2/ePN13333tfk8AAAA4X1wC8u7du7Vx48YW65xxxhkdeo9hw4aFLJ966qk644wztHz58mYD8ty5c3XLLbcEl30+n/r27duhdgCR4vUG7upXUMBsGgAARFNcAvKECRM0YcKEmL9vRkaGqqqqWnw9IyMjdg0CwuTxSDNnBu7ml5ISuHFJSUm8WwUAQGJKmDHIH3/8cciMFV988UXI6//617+0atUqjRkzJtZNAzrE6z0cjqXA86xZgXIAABB5jpjFYufOnXruueckSQcPHtRbb70lScrPz9ekSZMkSWVlZZo9e3bwRiC33367JOmUU06Rz+fTU089pZNPPlk33nhjHPYAaL/y8sPhuEF9feCufgy1AAAg8hwRkPfv3x8cs/zjH/9YkrRx40Z16dIlWOekk07S9ddfH1x+8cUXtXz5cr399tvKysrS008/rXPPPTe2DQcioKAgMKzCGpJTUwO3vAYAAJHnMsaYeDfCrnw+n3JyclRdXa3s7Ox4NwdJzOMJDKuorw+E49JSxiADACBFJ685ogcZSHYlJVJxcWBYRX4+QysAAIgmAjIQY+2drs3tJhgDABALCTOLBeAEHo/Uv79UVBR49nji3SIAAHAkAjIQI0zXBgCAMxCQgRhpabo2AABgHwRkIEYapmuzYro2AADsh4AMxIjbHbhFdGpqYLlhujYuvAMAwF6YxQKIIaZrAwDA/gjIQIwxXRsAAPbGEAsAAADAgoAMAAAAWBCQAQAAAAsCMgAAAGBBQAYAAAAsCMgAAACABQEZAAAAsCAgAwAAABYEZAAAAMCCgAwAAABYEJABAAAACwIyAAAAYEFABgAAACwI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jbZ8bq6++moVFBSouLhYixcvjlzDY2zlypXKzs7WqaeeGiybNGmSjDFatWpVi+vedNNNys/P18SJE/XnP/85Ytu1o7feekvp6ekaP358sGzChAlKS0vTW2+9FdY2lixZol27dunqq69u9NrcuXOVn5+vCRMm6KmnnmpxCJndNfV31JJVq1bJGKOJEycGy04//XRlZWUFj204dZymrcepue+n1NRUpaSERtpHHnlExx9/vMaNG6fHHntM9fX1bXovAnKUeL1eHXPMMSFlvXv3lhQYG9uaffv26S9/+YtKSkpC/qe7XC5dffXV+v3vf6/nnntO+fn5Ov3007VixYrI7kCMtOc4uVwuTZ8+XU8++aSef/55jRgxQkVFRVqyZEmHtmtnkdifd999Vy+99JJ+8IMfhJRPmzZNTz75pF544QWNHj1akydP1jPPPBOZhkdJU8ejYbm54xHOOu3Zrp01tT+9evVSSkpK2Pvz2WefaeHChY0+N+ecc44ef/xxLVmyRMXFxbriiiv02GOPRaztseT1etWrVy+5XK5gWbdu3dS1a9cWj9OECRM0f/58LV26VBdccIF+8pOf6Be/+EWHt2tXXq9XPXv2VFpaWrAsPT1dPXr0CHt/PB6Pxo4dq8GDB4eUjxkzRr/5zW+0dOlSXXLJJbr55pt15513RrT9dub1etWtW7eQTjWXy6Xc3NyQ76fW6iSbqqoqPfTQQ5o2bVrI5/Kkk07SI488oldeeUU/+clP9Mtf/rLJk7KWpLVeBZK0bt06TZkypcU6119/vebOnStJ8vv9If+zJAV7YMI5i1m0aJH27t2rH//4xyHlJ598sv7whz8El0eMGKFNmzbp3nvv1VlnnRXWvkTTZ5991mSPt9WMGTN0//33S2rfcRo4cKAWLlwYXB4+fLgqKip0zz336IILLmj3dmOpoqJCY8aMabHOJZdcol//+teSOr4/mzZt0pQpUzR9+nRdeeWVwfK8vDz99a9/DS4PGzZMW7du1T333KMrrrgi7P2JtaaOR8Nyc8cjnHXas107a2p/UlJSlJKSEtb+bNu2Teedd54mTpyom266KVjeuXNnvfLKK8HgN2TIEH377be69957Q+o5RVPHSQr8jbV0nP7+978Hj8EJJ5ygvXv36t5779WcOXOUlpbW7u3aVUf3p7KyUq+//rqefvrpRq8tXbo05FjW1dXppptu0l133RUSCBNVOMc20T5PHXXgwAFNmTJFmZmZjS7ofPbZZ4Ofp8GDB6tLly66+OKLdc8992jAgAFhbZ+AHKYRI0bo3XffbbFOdnZ28L9zc3O1a9eukNcblnNzc1t9P4/Ho0mTJjW6qtPaE9HgtNNO00MPPdTqNmOhoKCg1ePUrVu34H/n5uZq+/btIa+3dpyaOwbWoNee7cZS3759Wz1O1n8UcnNzG81UEu7+bN68WUVFRRo3blyjK+ybO5alpaWqra217S1Pc3Nz9f7774eUtXY8wlmnPdu1s6a+h6qqqlRXV9fq/uzYsUNFRUUqKCjQokWLGv18eeRn57TTTtMDDzyg7du3q0+fPpHZgRhp6jgdOnRI1dXVLR6npo7BgQMHtGXLFhUUFLR7u3aVm5ur3bt3NyrfvXt3WPvz1FNPKTs7WxdffHGj15o6lvX19friiy/0ve99r/2Ndojc3FxVV1errq4uJATv2rUr5PuptTrJ4sCBA7rwwgu1Y8cOlZWVKScnJ+T1pj5PkrRhw4awAzJDLMLUqVOnZqeqaXhYA3JhYaHWrl0bcla3atUqde/ePWR8Y1O++OILrVq1Sj/5yU/CatvmzZtDxtrGU3p6eqvHqXv37sH6hYWF+uCDD1RbWxssW7Vqlbp27RoybrI1Rx6DSG03WlJTU1s9TkcddVSwfmFhodavX6+amppg2apVq5Senq6TTjqp2ffZsmWLzjzzTI0ePVrPPPNMWOO9Nm/erG7duqlTp04d2sdoKiwsVHl5uXbu3BksW7VqlVwul0aNGtXuddqzXTsrLCzUV199FfLza8PY11NOOaXZ9b7++msVFRWpf//+evHFF8M6Udq8ebPS0tJCvgedorCwULt27dIXX3wRLGuYNrKwsDDs7WzevFkulyv4txup7dpFYWGh9u/frw8//DBYtm7dOh04cKDV/THG6KmnntL06dPVpUuXVt9r8+bNkmSbf9uirbCwUMYYvfPOO8GyjRs3avfu3cFjG06dZFBbW6spU6aooqJCZWVljYaRNaVdn6cOXeKHZlVWVpquXbua++67z9TV1ZkvvvjC9OnTJ2S6qA8//NDk5eWZDz/8MGTd22+/3fTp08ccOnSo0XYfeeQRs3LlSlNXV2f8fr95/vnnTXp6unnwwQejvk/R8M0335icnBxz++23m0OHDpmKigrTv39/c/311wfrbNy40eTl5QWvmP/tb39rVqxYYQ4dOmT8fr95+eWXTZcuXcxdd93Vpu06SVVVlcnNzTXXX3+9OXjwoNm6dasZOHCgueqqq4J1KisrTV5envn73/9ujDHBfb7kkkua/CwZE7j6d9myZebgwYPGGGNef/11k52dbW6++eao71NH7N2717jdbjNjxgxz4MAB880335jhw4ebqVOnBuvs2bPH5OXlmRdeeCHsdcKp4yQHDhwwxx13nPnBD35g9u/fb3bt2mVOPvnkkGmh9u7da/Ly8syf//xnY0zgb2fIkCGmuLi42RlSnnnmGbN48eLg1Ipvv/226d27t5k+fXr0dyoK6urqzJAhQ8yFF15o9u7da6qqqszpp59uxo0bF1IvLy/P/PGPfzTGBGaWefbZZ4PHaN26dcbtdpsLL7ywzdt1Cr/fb0aOHGnOPvtsU1NTY2pqasxZZ51lRo0aZfx+f7DewIEDzWOPPRay7muvvWYkmY8//rjRdl955RXz9NNPB6cJ/Pjjj83xxx9vzjrrrOjuUAy0NIvF9773PfPLX/4yuHzGGWeYsWPHmqqqKrN3715z/vnnmyFDhoTM3BBOHSdqaRaLMWPGBP99r62tNeeee64ZPHiw2b59e5P13377bTN//vzgNIHl5eXmpJNOMiNGjDD19fVht4mAHEWvvfaaGTBggOnatavp1KmTKSkpCQYRY4xZs2ZNoymADh06ZI455hhz5513NrnNjz/+2BQXF5usrCzTtWtXk5eXZx577LGQLyeneeutt0x+fr7p2rWrSU9PN9OnTzf79u0Lvr5+/fqQqYU+++wzc95555msrCyTmZlp+vTpYx566KFGXxCtbddp1q5da0444QTTpUsXk56ebqZNmxYy5+qWLVuMpOAUQNdee62RZI455hiTl5cXfJx22mnBdcrLy81FF11ksrKyTLdu3UyvXr3Mz3/+85DPqV199NFH5sQTTzSdO3c2aWlp5vzzzzd79uwJvr5z504jySxcuDDsdcKt4yT/+7//a04++WTTuXNnk56ebs4991yzc+fO4Os1NTVGUnCO9rvvvttIMr169Qr53AwcODC4TmVlpZk+fbrJzs422dnZpkePHmbOnDmOnge5vLzcnHrqqSYjI8Okp6ebCRMmmG3btoXUkRScS3379u2mpKTEZGdnm5ycHNO9e3dz8803N5q7N5ztOslXX31lxo4dazp16mQ6depkxo4da7766quQOpmZmY3maL/00ktNYWFhk9vcuXOnueaaa0xOTo7Jyckx2dnZ5tprr3X0dKYzZ840eXl5pnv37sblcgX/jqwnCL179w7pNNu2bZuZMGGCSU9PNxkZGebUU0815eXlIdsNp46TzJ492+Tl5ZmjjjrKSAoep3feeSdY5/jjjw92bi1evNhIMkcddVTI91NeXp7ZsmWLMcYYn89nbr/9dtOjRw/TvXt3k5mZaa688spmA3VzXMY4eB4VBzDGaPfu3erWrZs6d+4c8trBgwf1zTffqFevXsGfs+vr67V9+3YdffTRjeofue7BgwdDxvM63a5du5SZmdno57e6ujrt2LFDubm5IT/1Hjp0SAcOHFBWVla7tutUu3fvVpcuXdS1a9eQ8iM/O1VVVU3eYSktLa3RT1J1dXXat2+fI38e37NnjzIyMhpdyOP3+7Vt2zb16NGj0bFqbp221nGSb7/9Vunp6Y2+M4wx2rp1a/A4+Xw++Xy+RuunpKSETDMoBT5zNTU1IcOmnK6qqkqpqalNfq94vV5179495Bj6/X75fL5Wj0FL23Wi6upquVyuJr8ztm3bpqysrJB93bFjh7p06dJorKiVMUZVVVUhw8ucas+ePdq3b1+j8t69ewcvsN6+fbsyMzMbHcOamhrV19e3+JkKp44TfPvtt9q7d2+jcuu/9zt27FDnzp3VvXt37d+/v8lx8JLUp0+fRsMIv/3223Z/ngjIAAAAgAUX6QEAAAAWBGQAAADAgoAMAAAAWBCQAQAAAAsCMgAAAGBBQAYAAAAsCMgAAACABQEZAAAAsCAgAwAAABYEZAAAAMCCgAwAAABYpMW7AQCAyHjttdfk8/larZeTk6OJEyfGoEUA4EwuY4yJdyMAAB1jjFFWVpb27t3bat3zzjtPL730UgxaBQDORA8yACSAPXv2aNKkSc2+/s0332jVqlWSpNGjR8eqWQDgSPQgA0CC27p1qyZMmKDPP/9cl112mRYuXKi0NPpHAKA5XKQHAAnsq6++0hlnnKHPP/9cV111lZ555hnCMQC0goAMAAmqvLxcY8eO1ebNm3XNNdfoqaeeUkoKX/sA0Bq6EQAgAX322Wc666yztH37ds2ePVu//vWvm6y3f/9+LVu2TG+99Za6dOmiBx98MMYtBQD7YQwyACSYjz/+WBMnTtTOnTt155136he/+EWT9e699149+eSTGjt2rD766CNVV1dr165dMW4tANgPv7UBQAJ57733dOaZZ2rnzp36+c9/3mw4lqRzzjlHmzdv1uLFi9W3b98YthIA7I0hFgCQIFavXq3JkyfL5/PpV7/6lW699dYW65966qkxahkAOAsBGQASwD/+8Q+df/752rdvn5544gldd9118W4SADgWARkAHG7ZsmWaOnWqDh48KI/HoxkzZsS7SQDgaARkAHCwlStXasqUKTp48KCmTZumrKwsPf/8803WHTBggEaNGhXjFgKA8xCQAcDBFi9erIMHD0qSFi1apEWLFjVb92c/+xkBGQDCQEAGAAfLzc3V1KlTw6p71llnRbk1AJAYCMgA4GB33313vJsAAAmHeZABAAAAC3qQASBJLV++XEuXLpUklZeXa+/evbrhhhskSSNHjmQ2DABJi4AMAEmqZ8+eGjx4sCRp7ty5Ia/l5eXFo0kAYAsuY4yJdyMAAAAAu2AMMgAAAGBBQAYAAAAsCMgAAACABQEZAAAAsCAgAwAAABYEZAAAAMCCgAwAAABYEJABAAAACwIyAAAAYEFABgAAACwIyAAAAIDF/we+CJPm+Xen8gAAAABJRU5ErkJggg==",
+      "text/plain": [
+       "<Figure size 800x600 with 1 Axes>"
+      ]
+     },
+     "metadata": {},
+     "output_type": "display_data"
+    }
+   ],
+   "source": [
+    "\n",
+    "\n",
+    "def generate_3d_data(m, w1=0.1, w2=0.3, noise=0.1): \n",
+    "    angles = np.random.rand(m) * 3 * np.pi / 2 - 0.5  #uneven distribution\n",
+    "    data = np.empty((m, 3))  #initialize 3d dataset\n",
+    "    data[:, 0] = np.cos(angles) + np.sin(angles)/2 + noise *  np.random.randn(m) / 2 #oval with noise\n",
+    "    data[:, 1] = np.sin(angles) * 0.7 + noise *  np.random.randn(m) / 2 \n",
+    "    data[:, 2] = data[:, 0] * w1 + data[:, 1] * w2 + noise *  np.random.randn(m) \n",
+    "    return data \n",
+    "\n",
+    "# Generate new sets of 3D data\n",
+    "X_train = generate_3d_data(60)\n",
+    "X_valid = generate_3d_data(500)\n",
+    "\n",
+    "# Center both datasets using the training mean\n",
+    "train_mean = X_train.mean(axis=0, keepdims=True)\n",
+    "\n",
+    "X_train = X_train - train_mean\n",
+    "X_valid = X_valid - train_mean\n",
+    "\n",
+    "print(f\"x_train: {X_train.shape}\")\n",
+    "fig = px.scatter_3d(X_train, x=0, y=1, z=2, labels={\"0\": \"x1\", \"1\": \"x2\", \"2\": \"x3\"})\n",
+    "fig.show()\n",
+    "\n",
+    "print(f\"x_valid: {X_valid.shape}\")\n",
+    "\n",
+    "# Convert NumPy arrays to PyTorch tensors\n",
+    "X_train = torch.tensor(X_train, dtype=torch.float32)\n",
+    "X_valid = torch.tensor(X_valid, dtype=torch.float32)\n",
+    "\n",
+    "# Create datasets\n",
+    "train_set = TensorDataset(X_train, X_train)\n",
+    "valid_set = TensorDataset(X_valid, X_valid)\n",
+    "\n",
+    "# Create data loaders\n",
+    "train_loader = DataLoader(\n",
+    "    train_set,\n",
+    "    batch_size=32,\n",
+    "    shuffle=True\n",
+    ")\n",
+    "\n",
+    "valid_loader = DataLoader(\n",
+    "    valid_set,\n",
+    "    batch_size=32\n",
+    ")\n",
+    "print(\"ok\")\n",
+    "\n",
+    "#autoencoder\n",
+    "encoder = nn.Linear(3, 2)\n",
+    "decoder = nn.Linear(2, 3)\n",
+    "autoencoder = nn.Sequential(encoder, decoder).to(device)\n",
+    "\n",
+    "optimizer = torch.optim.NAdam(autoencoder.parameters(), lr=0.2)\n",
+    "mse = nn.MSELoss()\n",
+    "rmse = torchmetrics.MeanSquaredError(squared=False).to(device)\n",
+    "history = train(autoencoder, optimizer, mse, rmse, train_loader, valid_loader, n_epochs=20)\n",
+    "\n",
+    "codings = encoder(X_train.to(device)).detach().cpu().numpy()\n",
+    "\n",
+    "%matplotlib inline\n",
+    "fig = plt.figure(figsize=(8, 6))\n",
+    "plt.plot(codings[:, 0], codings[:, 1], \"b.\")\n",
+    "plt.xlabel(\"$z_1$\", fontsize=18)\n",
+    "plt.ylabel(\"$z_2$\", fontsize=18, rotation=0)\n",
+    "plt.show()"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "e053808e",
+   "metadata": {},
+   "source": [
+    "## Problem 2\n",
+    "Train a deep autoencoder with the architecture presented on slide 33 and \n",
+    "train it on MNIST data (images of handwritten digits). Present the original images of the first 5 elements of that data set and their reconstructed images.  "
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": "Load MNIST and split it the same way Géron splits Fashion MNIST (55,000 training / 5,000 validation). Each sample is wrapped so that the target equals the input."
+  },
+  {
+   "cell_type": "code",
+   "metadata": {},
+   "execution_count": null,
+   "outputs": [],
+   "source": "import torchvision\nimport torchvision.transforms.v2 as T\nimport torch.nn.functional as F\nfrom torch.utils.data import Dataset\n\ntoTensor = T.Compose([T.ToImage(), T.ToDtype(torch.float32, scale=True)])\n\nmnist_train_and_valid = torchvision.datasets.MNIST(\n    root=\"datasets\", train=True, download=True, transform=toTensor)\n\ntorch.manual_seed(42)\nmnist_train, mnist_valid = torch.utils.data.random_split(\n    mnist_train_and_valid, [55_000, 5_000])\n\nclass AutoencoderDataset(Dataset):\n    def __init__(self, base_dataset):\n        self.base_dataset = base_dataset\n\n    def __len__(self):\n        return len(self.base_dataset)\n\n    def __getitem__(self, idx):\n        x, _ = self.base_dataset[idx]\n        return x, x  # the target is the input itself\n\ntrain_loader = DataLoader(AutoencoderDataset(mnist_train), batch_size=32,\n                          shuffle=True)\nvalid_loader = DataLoader(AutoencoderDataset(mnist_valid), batch_size=32)\n\n# validation images/labels as tensors (used in Problems 3-6)\nX_mnist_valid = torch.stack([x for x, _ in mnist_valid])\ny_mnist_valid = torch.tensor([y for _, y in mnist_valid])\n\nprint(f\"train: {len(mnist_train)}, valid: {len(mnist_valid)}, \"\n      f\"image shape: {tuple(X_mnist_valid.shape[1:])}\")"
+  },
+  {
+   "cell_type": "code",
+   "metadata": {},
+   "execution_count": null,
+   "outputs": [],
+   "source": "# From slide 33: stacked autoencoder with 3 hidden layers and 1 output layer\ntorch.manual_seed(42)\n\nstacked_encoder = nn.Sequential(\n    nn.Flatten(),\n    nn.Linear(1 * 28 * 28, 128), nn.ReLU(),\n    nn.Linear(128, 32), nn.ReLU(),\n)\nstacked_decoder = nn.Sequential(\n    nn.Linear(32, 128), nn.ReLU(),\n    nn.Linear(128, 1 * 28 * 28), nn.Sigmoid(),\n    nn.Unflatten(dim=1, unflattened_size=(1, 28, 28))\n)\nstacked_ae = nn.Sequential(stacked_encoder, stacked_decoder).to(device)"
+  },
+  {
+   "cell_type": "code",
+   "metadata": {},
+   "execution_count": null,
+   "outputs": [],
+   "source": "optimizer = torch.optim.NAdam(stacked_ae.parameters(), lr=0.01)\nmse = nn.MSELoss()\nrmse = torchmetrics.MeanSquaredError(squared=False).to(device)\nhistory = train(stacked_ae, optimizer, mse, rmse, train_loader, valid_loader,\n                n_epochs=10)"
+  },
+  {
+   "cell_type": "code",
+   "metadata": {},
+   "execution_count": null,
+   "outputs": [],
+   "source": "def plot_rows(rows, row_titles, col_titles=None):\n    \"\"\"Plots several rows of images; each row is a tensor of shape [n, 1, 28, 28].\"\"\"\n    n_rows, n_cols = len(rows), len(rows[0])\n    fig, axes = plt.subplots(n_rows, n_cols, figsize=(n_cols * 1.5, n_rows * 1.6),\n                             squeeze=False)\n    for r, (images, title) in enumerate(zip(rows, row_titles)):\n        for c in range(n_cols):\n            ax = axes[r, c]\n            ax.imshow(images[c].squeeze(0).detach().cpu().clamp(0, 1),\n                      cmap=\"binary\", vmin=0, vmax=1)\n            ax.set_xticks([])\n            ax.set_yticks([])\n            for spine in ax.spines.values():\n                spine.set_visible(False)\n            if r == 0 and col_titles is not None:\n                ax.set_title(col_titles[c], fontsize=11)\n        axes[r, 0].set_ylabel(title, rotation=0, ha=\"right\", va=\"center\", fontsize=11)\n    plt.tight_layout()\n    plt.show()\n\ndef reconstruct(model, images):\n    model.eval()  # important for the dropout models in Problem 5\n    with torch.no_grad():\n        y_pred = model(images.to(device))\n    if isinstance(y_pred, tuple):\n        y_pred = y_pred.output\n    return y_pred.cpu()\n\n# first 5 elements of the MNIST data set\nfirst5 = torch.stack([mnist_train_and_valid[i][0] for i in range(5)])\nfirst5_labels = [mnist_train_and_valid[i][1] for i in range(5)]\n\nplot_rows([first5, reconstruct(stacked_ae, first5)],\n          [\"Original\", \"Reconstructed\"],\n          col_titles=[f\"label {y}\" for y in first5_labels])"
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": "The reconstructions are recognizable but somewhat blurry, which is expected: each 784-pixel image is squeezed through a 32-number coding layer."
+  },
+  {
+   "cell_type": "markdown",
+   "id": "0c953db7",
+   "metadata": {},
+   "source": [
+    "## Problem 3. \n",
+    "Pass 4 images from the Fashion MNIST data set to the autoencoder trained in Problem 2 and present their reconstructed images. This is a demonstration of the anomaly detection. Calculate the loss value that such autoencoder produces for MNIST images and the loss values for Fashion MNIST images. Compare"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "metadata": {},
+   "execution_count": null,
+   "outputs": [],
+   "source": "fashion_data = torchvision.datasets.FashionMNIST(\n    root=\"datasets\", train=False, download=True, transform=toTensor)\nX_fashion = torch.stack([fashion_data[i][0] for i in range(len(X_mnist_valid))])\n\nfashion_classes = fashion_data.classes\nfashion4 = X_fashion[:4]\nplot_rows([fashion4, reconstruct(stacked_ae, fashion4)],\n          [\"Original\", \"Reconstructed\"],\n          col_titles=[fashion_classes[fashion_data[i][1]] for i in range(4)])"
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": "The MNIST-trained autoencoder can only \"speak digit\": it tries to turn every input into something digit-like, so clothing items are reconstructed poorly. That is exactly what makes a high reconstruction loss a useful anomaly signal.\n\nNow compare per-image reconstruction losses (MSE) for 5,000 unseen MNIST validation images vs. 5,000 Fashion MNIST images:"
+  },
+  {
+   "cell_type": "code",
+   "metadata": {},
+   "execution_count": null,
+   "outputs": [],
+   "source": "def compute_reconstruction_losses(model, X, batch_size=1000):\n    \"\"\"Per-image MSE between each image and its reconstruction.\"\"\"\n    model.eval()\n    losses = []\n    with torch.no_grad():\n        for i in range(0, len(X), batch_size):\n            X_batch = X[i:i + batch_size].to(device)\n            y_pred = model(X_batch)\n            losses.append(F.mse_loss(y_pred, X_batch, reduction=\"none\")\n                          .flatten(start_dim=1).mean(dim=1).cpu())\n    return torch.cat(losses)\n\nlosses_first5_mnist = compute_reconstruction_losses(stacked_ae, first5)\nlosses_fashion4 = compute_reconstruction_losses(stacked_ae, fashion4)\nlosses_mnist = compute_reconstruction_losses(stacked_ae, X_mnist_valid)\nlosses_fashion = compute_reconstruction_losses(stacked_ae, X_fashion)\n\nprint(\"Loss on the 5 MNIST images (Problem 2):\", [f\"{l:.4f}\" for l in losses_first5_mnist.tolist()])\nprint(\"Loss on the 4 Fashion images above:    \", [f\"{l:.4f}\" for l in losses_fashion4.tolist()])\nprint()\nprint(f\"Mean loss, MNIST validation set   : {losses_mnist.mean().item():.4f}\")\nprint(f\"Mean loss, Fashion MNIST images   : {losses_fashion.mean().item():.4f}\")\nprint(f\"Ratio Fashion / MNIST             : {(losses_fashion.mean() / losses_mnist.mean()).item():.1f}x\")\n\n# simple anomaly detector: flag anything above the 99th percentile of MNIST losses\nthreshold = torch.quantile(losses_mnist, 0.99).item()\nprint(f\"\\nThreshold (99th pct of MNIST losses): {threshold:.4f}\")\nprint(f\"Fashion images flagged as anomalies : {(losses_fashion > threshold).float().mean().item():.1%}\")\nprint(f\"MNIST images flagged (false alarms) : {(losses_mnist > threshold).float().mean().item():.1%}\")\n\nplt.figure(figsize=(8, 4))\nplt.hist(losses_mnist, bins=85, alpha=0.8, label=\"MNIST images\")\nplt.hist(losses_fashion, bins=85, alpha=0.8, label=\"Fashion MNIST images\")\nplt.axvline(threshold, color=\"k\", linestyle=\"--\", label=\"99th pct threshold\")\nplt.xlabel(\"Reconstruction loss (MSE)\")\nplt.ylabel(\"Count\")\nplt.legend()\nplt.grid()\nplt.show()"
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": "**Comparison.** The reconstruction loss on Fashion MNIST images is several times larger on average than on MNIST images the autoencoder has never seen (see the printed ratio), and the two histograms barely overlap. The autoencoder learned to reconstruct digits well, but Fashion MNIST images lie far from that data distribution, so they reconstruct badly. Thresholding the reconstruction loss therefore gives a simple anomaly detector: with the threshold set at the 99th percentile of MNIST losses, only about 1% of digits are falsely flagged while the large majority of fashion images are caught."
+  },
+  {
+   "cell_type": "markdown",
+   "id": "5237cc92",
+   "metadata": {},
+   "source": [
+    "## Problem 4. \n",
+    "Please generate a 2D t-SNE display for MNIST data set similar to the display on slide 49. "
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": "As on slide 49: compress the 5,000 validation images to 32 numbers with the stacked encoder from Problem 2, then reduce those codings to 2D with t-SNE."
+  },
+  {
+   "cell_type": "code",
+   "metadata": {},
+   "execution_count": null,
+   "outputs": [],
+   "source": "from sklearn.manifold import TSNE\n\nstacked_encoder.eval()\nwith torch.no_grad():\n    X_valid_compressed = stacked_encoder(X_mnist_valid.to(device)).cpu()\n\ntsne = TSNE(init=\"pca\", learning_rate=\"auto\", random_state=42)\nX_valid_2D = tsne.fit_transform(X_valid_compressed.numpy())"
+  },
+  {
+   "cell_type": "code",
+   "metadata": {},
+   "execution_count": null,
+   "outputs": [],
+   "source": "from matplotlib.offsetbox import AnnotationBbox, OffsetImage\n\nplt.figure(figsize=(11, 9))\ncmap = plt.cm.tab10\nZ = (X_valid_2D - X_valid_2D.min()) / (X_valid_2D.max() - X_valid_2D.min())  # normalize to 0-1\nscatter = plt.scatter(Z[:, 0], Z[:, 1], c=y_mnist_valid.numpy(), s=10, cmap=cmap)\n\nimage_positions = np.array([[1., 1.]])\nfor index, position in enumerate(Z):\n    dist = ((position - image_positions) ** 2).sum(axis=1)\n    if dist.min() > 0.02:  # only if far enough from images already drawn\n        image_positions = np.r_[image_positions, [position]]\n        imagebox = AnnotationBbox(\n            OffsetImage(X_mnist_valid[index].squeeze(dim=0).numpy(), cmap=\"binary\"),\n            position, bboxprops={\"edgecolor\": cmap(int(y_mnist_valid[index])), \"lw\": 2})\n        plt.gca().add_artist(imagebox)\n\nplt.legend(*scatter.legend_elements(), title=\"Digit\",\n           loc=\"upper left\", bbox_to_anchor=(1.01, 1))\nplt.title(\"t-SNE of the stacked autoencoder's 32-D codings (MNIST validation set)\")\nplt.axis(\"off\")\nplt.show()"
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": "The digits form clearly separated clusters, even though the autoencoder never saw the labels. Visually similar digits (e.g. 4 / 9, 3 / 5 / 8) end up in neighboring or partially overlapping clusters."
+  },
+  {
+   "cell_type": "markdown",
+   "id": "52ee8806",
+   "metadata": {},
+   "source": [
+    "## Problem 5. \n",
+    "Implement a convolutional denoising autoencoder with dropout layer and \n",
+    "train it with MNIST data set. As the dropout parameter use 0.20. Produce 5 original images of random digits and their reconstructed images. Change the dropout parameter to 0.10 and compare new reconstructed images with the previous one. Just produce a qualitative assessment of the change in quality of the reconstructed images if any.  (20%) "
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": "The convolutional autoencoder is Géron's `conv_encoder` / `conv_decoder`, with an `nn.Dropout` layer added at the input. Dropout randomly zeroes input pixels during training only, so the network learns to reconstruct the clean image from a corrupted one (denoising). In eval mode the dropout layer does nothing."
+  },
+  {
+   "cell_type": "code",
+   "metadata": {},
+   "execution_count": null,
+   "outputs": [],
+   "source": "def make_conv_denoising_ae(dropout_rate):\n    torch.manual_seed(42)\n    conv_encoder = nn.Sequential(\n        nn.Dropout(dropout_rate),  # corrupts the input (training only)\n        nn.Conv2d(1, 16, kernel_size=3, padding=\"same\"), nn.ReLU(),\n        nn.MaxPool2d(kernel_size=2),  # output: 16 × 14 × 14\n        nn.Conv2d(16, 32, kernel_size=3, padding=\"same\"), nn.ReLU(),\n        nn.MaxPool2d(kernel_size=2),  # output: 32 × 7 × 7\n        nn.Conv2d(32, 64, kernel_size=3, padding=\"same\"), nn.ReLU(),\n        nn.MaxPool2d(kernel_size=2),  # output: 64 × 3 × 3\n        nn.Conv2d(64, 32, kernel_size=3, padding=\"same\"), nn.ReLU(),\n        nn.AdaptiveAvgPool2d((1, 1)), nn.Flatten())  # output: 32\n    conv_decoder = nn.Sequential(\n        nn.Linear(32, 16 * 3 * 3),\n        nn.Unflatten(dim=1, unflattened_size=(16, 3, 3)),\n        nn.ConvTranspose2d(16, 32, kernel_size=3, stride=2), nn.ReLU(),  # 32 × 7 × 7\n        nn.ConvTranspose2d(32, 16, kernel_size=3, stride=2, padding=1,\n                           output_padding=1), nn.ReLU(),  # 16 × 14 × 14\n        nn.ConvTranspose2d(16, 1, kernel_size=3, stride=2, padding=1,\n                           output_padding=1), nn.Sigmoid())  # 1 × 28 × 28\n    return nn.Sequential(conv_encoder, conv_decoder).to(device)"
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": "### Dropout = 0.20"
+  },
+  {
+   "cell_type": "code",
+   "metadata": {},
+   "execution_count": null,
+   "outputs": [],
+   "source": "conv_dae_20 = make_conv_denoising_ae(0.20)\noptimizer = torch.optim.NAdam(conv_dae_20.parameters(), lr=0.005)\nhistory_20 = train(conv_dae_20, optimizer, mse, rmse, train_loader, valid_loader,\n                   n_epochs=10)"
+  },
+  {
+   "cell_type": "code",
+   "metadata": {},
+   "execution_count": null,
+   "outputs": [],
+   "source": "# 5 random digits from the validation set (same ones are reused for the 0.10 model)\ngen = torch.Generator().manual_seed(7)\nrand_idx = torch.randint(0, len(X_mnist_valid), (5,), generator=gen)\nrand_digits = X_mnist_valid[rand_idx]\nrand_labels = [f\"label {y}\" for y in y_mnist_valid[rand_idx].tolist()]\n\ndef corrupt(X, p, seed=42):\n    \"\"\"Apply the same kind of corruption the model saw in training (input dropout).\"\"\"\n    torch.manual_seed(seed)\n    return F.dropout(X, p=p, training=True)\n\nnoisy_20 = corrupt(rand_digits, 0.20)\nplot_rows([rand_digits, noisy_20,\n           reconstruct(conv_dae_20, noisy_20), reconstruct(conv_dae_20, rand_digits)],\n          [\"Original\", \"Input, 20%\\ndropout\", \"Denoised\", \"Recon. of\\nclean input\"],\n          col_titles=rand_labels)"
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": "### Dropout = 0.10"
+  },
+  {
+   "cell_type": "code",
+   "metadata": {},
+   "execution_count": null,
+   "outputs": [],
+   "source": "conv_dae_10 = make_conv_denoising_ae(0.10)\noptimizer = torch.optim.NAdam(conv_dae_10.parameters(), lr=0.005)\nhistory_10 = train(conv_dae_10, optimizer, mse, rmse, train_loader, valid_loader,\n                   n_epochs=10)"
+  },
+  {
+   "cell_type": "code",
+   "metadata": {},
+   "execution_count": null,
+   "outputs": [],
+   "source": "noisy_10 = corrupt(rand_digits, 0.10)\nplot_rows([rand_digits, noisy_10,\n           reconstruct(conv_dae_10, noisy_10), reconstruct(conv_dae_10, rand_digits)],\n          [\"Original\", \"Input, 10%\\ndropout\", \"Denoised\", \"Recon. of\\nclean input\"],\n          col_titles=rand_labels)"
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": "### Side-by-side comparison"
+  },
+  {
+   "cell_type": "code",
+   "metadata": {},
+   "execution_count": null,
+   "outputs": [],
+   "source": "plot_rows([rand_digits,\n           reconstruct(conv_dae_20, rand_digits),\n           reconstruct(conv_dae_10, rand_digits),\n           reconstruct(conv_dae_20, noisy_20),\n           reconstruct(conv_dae_10, noisy_20)],\n          [\"Original\", \"p=0.20 model\\n(clean in)\", \"p=0.10 model\\n(clean in)\",\n           \"p=0.20 model\\n(20% noisy in)\", \"p=0.10 model\\n(20% noisy in)\"],\n          col_titles=rand_labels)\n\ndef rmse_with_corruption(model, X, p, batch_size=1000):\n    \"\"\"Validation RMSE when the input is corrupted with dropout rate p (target = clean).\"\"\"\n    torch.manual_seed(0)\n    model.eval()\n    sq_err = 0.0\n    with torch.no_grad():\n        for i in range(0, len(X), batch_size):\n            X_batch = X[i:i + batch_size].to(device)\n            inputs = F.dropout(X_batch, p=p, training=True) if p > 0 else X_batch\n            sq_err += F.mse_loss(model(inputs), X_batch, reduction=\"sum\").item()\n    return (sq_err / X.numel()) ** 0.5\n\nprint(f\"{'validation RMSE':<18}{'clean input':>13}{'10% dropped':>13}{'20% dropped':>13}\")\nfor name, model in [(\"p=0.20 model\", conv_dae_20), (\"p=0.10 model\", conv_dae_10)]:\n    scores = [rmse_with_corruption(model, X_mnist_valid, p) for p in (0.0, 0.10, 0.20)]\n    print(f\"{name:<18}\" + \"\".join(f\"{s:>13.4f}\" for s in scores))"
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": "**Qualitative assessment.** Lowering the dropout rate from 0.20 to 0.10 changes the reconstructions only slightly. The digits are equally recognizable in both cases, and both sets stay somewhat blurry, because the dominant limitation is the 32-number bottleneck, not the dropout. With 0.10 dropout the training task is easier, so reconstructions of clean inputs tend to be marginally sharper and closer to the originals (thinner, better-defined strokes, a slightly lower clean-input RMSE). The 0.20 model, trained on harder corruption, is a bit smoother and copes better when the input is heavily corrupted (compare the last two rows and the 20% column of the table). In short, there is a small trade-off between reconstruction fidelity (lower dropout) and robustness to noise (higher dropout), but at these rates the visual difference is minor."
+  },
+  {
+   "cell_type": "markdown",
+   "id": "9551f8fd",
+   "metadata": {},
+   "source": [
+    "## Problem 6. \n",
+    "Train a Variational Autoencoder on MNIST dataset with coding dimension \n",
+    "of 2. Pick the mean coding values for two random images of two digits, for example 3 and 7. Create a set of 20 values uniformly distributed between those two coding values. Generate reconstruction images for every one of those coding values and present them as a 5x4 matrix"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": "Géron's VAE from the chapter, with `codings_dim=2`. The encoder outputs a mean and log-variance for each coding dimension; the loss is reconstruction MSE plus the KL-divergence term."
+  },
+  {
+   "cell_type": "code",
+   "metadata": {},
+   "execution_count": null,
+   "outputs": [],
+   "source": "from collections import namedtuple\n\nVAEOutput = namedtuple(\"VAEOutput\", [\"output\", \"codings_mean\", \"codings_logvar\"])\n\nclass VAE(nn.Module):\n    def __init__(self, codings_dim=32):\n        super().__init__()\n        self.codings_dim = codings_dim\n        self.encoder = nn.Sequential(\n            nn.Flatten(),\n            nn.Linear(1 * 28 * 28, 128), nn.ReLU(),\n            nn.Linear(128, 2 * codings_dim))  # outputs both the mean and logvar\n        self.decoder = nn.Sequential(\n            nn.Linear(codings_dim, 128), nn.ReLU(),\n            nn.Linear(128, 1 * 28 * 28), nn.Sigmoid(),\n            nn.Unflatten(dim=1, unflattened_size=(1, 28, 28)))\n\n    def encode(self, X):\n        return self.encoder(X).chunk(2, dim=-1)  # (mean, logvar)\n\n    def sample_codings(self, codings_mean, codings_logvar):\n        codings_std = torch.exp(0.5 * codings_logvar)\n        noise = torch.randn_like(codings_std)\n        return codings_mean + noise * codings_std\n\n    def decode(self, Z):\n        return self.decoder(Z)\n\n    def forward(self, X):\n        codings_mean, codings_logvar = self.encode(X)\n        codings = self.sample_codings(codings_mean, codings_logvar)\n        output = self.decode(codings)\n        return VAEOutput(output, codings_mean, codings_logvar)\n\ndef vae_loss(y_pred, y_target, kl_weight=1.0):\n    output, mean, logvar = y_pred\n    kl_div = -0.5 * torch.sum(1 + logvar - logvar.exp() - mean.square(), dim=-1)\n    return F.mse_loss(output, y_target) + kl_weight * kl_div.mean() / 784"
+  },
+  {
+   "cell_type": "code",
+   "metadata": {},
+   "execution_count": null,
+   "outputs": [],
+   "source": "torch.manual_seed(42)\nvae = VAE(codings_dim=2).to(device)\noptimizer = torch.optim.NAdam(vae.parameters(), lr=1e-3)\nhistory_vae = train(vae, optimizer, vae_loss, rmse, train_loader, valid_loader,\n                    n_epochs=20)"
+  },
+  {
+   "cell_type": "code",
+   "metadata": {},
+   "execution_count": null,
+   "outputs": [],
+   "source": "# mean codings of all validation images\nvae.eval()\nwith torch.no_grad():\n    codings_mean, _ = vae.encode(X_mnist_valid.to(device))\ncodings_mean = codings_mean.cpu()\n\n# pick one random \"3\" and one random \"7\"\ngen = torch.Generator().manual_seed(42)\ndef random_index_of(digit):\n    candidates = (y_mnist_valid == digit).nonzero().flatten()\n    return candidates[torch.randint(len(candidates), (1,), generator=gen)].item()\n\nidx_start, idx_end = random_index_of(3), random_index_of(7)\nz_start, z_end = codings_mean[idx_start], codings_mean[idx_end]\nprint(f\"mean coding of the 3: {z_start.numpy()}\")\nprint(f\"mean coding of the 7: {z_end.numpy()}\")\n\n# 2D latent space, with the two chosen points and the interpolation path\nplt.figure(figsize=(8, 7))\nsc = plt.scatter(codings_mean[:, 0].numpy(), codings_mean[:, 1].numpy(), c=y_mnist_valid.numpy(),\n                 s=4, cmap=\"tab10\", alpha=0.6)\n(x0, y0), (x1, y1) = z_start.tolist(), z_end.tolist()\nplt.plot([x0, x1], [y0, y1], \"k-\", lw=2)\nstart_marker, = plt.plot(x0, y0, \"k^\", markersize=12)\nend_marker, = plt.plot(x1, y1, \"ks\", markersize=12)\nhandles, labels = sc.legend_elements()\nplt.legend(handles + [start_marker, end_marker], labels + [\"the 3\", \"the 7\"],\n           title=\"Digit\", loc=\"upper left\", bbox_to_anchor=(1.01, 1))\nplt.xlabel(\"$z_1$\")\nplt.ylabel(\"$z_2$\", rotation=0)\nplt.title(\"VAE mean codings (validation set)\")\nplt.grid(True)\nplt.show()\n\nplot_rows([X_mnist_valid[[idx_start, idx_end]]], [\"Chosen\\nimages\"],\n          col_titles=[\"start (3)\", \"end (7)\"])"
+  },
+  {
+   "cell_type": "code",
+   "metadata": {},
+   "execution_count": null,
+   "outputs": [],
+   "source": "# 20 codings uniformly spaced on the segment between the two mean codings\nn_steps = 20\nweights = torch.linspace(0, 1, n_steps).view(n_steps, 1)\ninterp_codings = torch.lerp(z_start, z_end, weights)  # shape [20, 2]\n\nwith torch.no_grad():\n    interp_images = vae.decode(interp_codings.to(device)).cpu()\n\nfig, axes = plt.subplots(5, 4, figsize=(7, 9.5))\nfor k, ax in enumerate(axes.flat):\n    ax.imshow(interp_images[k].squeeze(0), cmap=\"binary\", vmin=0, vmax=1)\n    z1, z2 = interp_codings[k].tolist()\n    ax.set_title(f\"{k + 1}: ({z1:.2f}, {z2:.2f})\", fontsize=9)\n    ax.axis(\"off\")\nplt.suptitle(\"Decoded interpolation from a 3 to a 7 (read row by row)\")\nplt.tight_layout()\nplt.show()"
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": "Reading the 5×4 matrix row by row, the decoded images morph gradually from the 3 into the 7. Because the latent space is only 2D, the straight line between the two codings can pass through regions belonging to other digits (see the latent-space plot above), so some intermediate images may look like a different digit before the 7 emerges. The smoothness of the transition shows that the VAE's latent space is continuous: nearby codings decode to similar images."
+  }
+ ],
+ "metadata": {
+  "kernelspec": {
+   "display_name": ".venv-1 (3.12.14)",
+   "language": "python",
+   "name": "python3"
+  },
+  "language_info": {
+   "codemirror_mode": {
+    "name": "ipython",
+    "version": 3
+   },
+   "file_extension": ".py",
+   "mimetype": "text/x-python",
+   "name": "python",
+   "nbconvert_exporter": "python",
+   "pygments_lexer": "ipython3",
+   "version": "3.12.14"
+  }
+ },
+ "nbformat": 4,
+ "nbformat_minor": 5
+}
